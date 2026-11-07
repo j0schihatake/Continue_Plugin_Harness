@@ -1,0 +1,4 @@
+# dsh-auto-press bundle patch: добавляет хост-половину плагина.
+- insert:
+    - id: dsh-auto-press
+      name: 'dsh-auto-press'
