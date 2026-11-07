@@ -15,6 +15,7 @@ window.__ModuleLoader__.load({
     var exports = module.exports
 
     const APPROVE_RE = /(allow once|allow-once|разрешить один раз|разрешить однократно)/i
+    const GOAL_RESUME_SELECTOR = 'button[aria-label="Resume goal"]'
     const GOAL_PLAY_RE = /^(resume|resume goal|play|continue|продолжить|возобновить)/i
     const GOAL_CONTEXT_RE = /goal|цель|цели/i
     const CLICK_GOAL = true
@@ -80,6 +81,15 @@ window.__ModuleLoader__.load({
     function pressGoalPlay() {
       if (!CLICK_GOAL) return false
       let pressed = false
+
+      // Основной путь: точная кнопка панели цели (Inactive Goal → Resume goal).
+      for (const el of document.querySelectorAll(GOAL_RESUME_SELECTOR)) {
+        if (!visible(el)) continue
+        if (clickButton(el, 'goal-play')) pressed = true
+      }
+      if (pressed) return true
+
+      // Запасной путь: эвристика по подписи/контексту.
       for (const el of document.querySelectorAll('button, [role="button"]')) {
         if (!visible(el)) continue
         const label = [
@@ -146,7 +156,7 @@ window.__ModuleLoader__.load({
     exports.name = 'dsh-auto-press'
     exports.inject = []
     exports.apply = apply
-    exports.__test = { APPROVE_RE, GOAL_PLAY_RE, visible, buttonText }
+    exports.__test = { APPROVE_RE, GOAL_PLAY_RE, GOAL_RESUME_SELECTOR, visible, buttonText }
     return module.exports
   },
 })

@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-press",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Auto-press 'Allow once' in the DSH web approval dialog and resume a stopped goal",
   "type": "module",
   "main": "./src/index.mjs",
