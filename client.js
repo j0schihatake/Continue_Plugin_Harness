@@ -187,6 +187,7 @@ window.__ModuleLoader__.load({
       const [strictOutside, setStrictOutside] = React.useState(true)
       const [lockPlugins, setLockPlugins] = React.useState(true)
       const [localOnly, setLocalOnly] = React.useState(false)
+      const [approveNoTab, setApproveNoTab] = React.useState(false)
       const [roots, setRoots] = React.useState([])
       const [addRoot, setAddRoot] = React.useState('')
       const [paths, setPaths] = React.useState([])
@@ -208,6 +209,7 @@ window.__ModuleLoader__.load({
           setStrictOutside(v.strictOutside !== false)
           setLockPlugins(v.lockPlugins !== false)
           setLocalOnly(v.localOnly === true)
+          setApproveNoTab(v.approveWithoutTab === true)
           setRoots(v.extraRoots || [])
         }).catch((e) => setErr(String(e.message || e))).finally(() => setBusy(false))
       }
@@ -247,6 +249,16 @@ window.__ModuleLoader__.load({
         rpc('setLocalOnly', { enabled: next }).then((v) => {
           setLocalOnly(v.localOnly === true)
           setMsg(v.localOnly ? 'Режим «без интернета» включён: веб-инструменты и сетевые загрузки запрещены' : 'Интернет-доступ агенту разрешён')
+        }).catch((e) => setErr(String(e.message || e)))
+      }
+
+      function toggleApproveNoTab() {
+        const next = !approveNoTab
+        rpc('setApproveWithoutTab', { enabled: next }).then((v) => {
+          setApproveNoTab(v.approveWithoutTab === true)
+          setMsg(v.approveWithoutTab
+            ? 'Одобрение без вкладки включено: безопасные вызовы одобряются на сервере, диалог не нужен'
+            : 'Одобрение без вкладки выключено: подтверждения снова только через диалог')
         }).catch((e) => setErr(String(e.message || e)))
       }
 
@@ -308,6 +320,7 @@ window.__ModuleLoader__.load({
         e('button', { className: 'dap-btn' + (roots.length ? ' dap-btn-on' : ''), onClick: () => openDialog('settings'), title: 'Разрешённые папки и защита системы' }, '⚙️ Настройки' + (roots.length ? ' · ' + roots.length : '')),
         e('button', { className: 'dap-btn' + (lockPlugins ? ' dap-btn-on' : ''), onClick: togglePlugins, title: 'Запретить агенту менять, переписывать и добавлять плагины' }, '🔌 Плагины'),
         e('button', { className: 'dap-btn' + (localOnly ? ' dap-btn-on' : ''), onClick: toggleLocalOnly, title: 'Запретить агенту выход в интернет (веб-поиск и сетевые загрузки)' }, '🏠 Без интернета'),
+        e('button', { className: 'dap-btn' + (approveNoTab ? ' dap-btn-on' : ''), onClick: toggleApproveNoTab, title: 'Одобрять безопасные вызовы на сервере, не требуя открытой вкладки проекта' }, '🖱 Без вкладки'),
       )
 
       let dialog = null

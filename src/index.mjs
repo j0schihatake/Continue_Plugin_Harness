@@ -19,7 +19,7 @@ export const inject = ['agents', 'goals']
 
 const DIR = path.join(os.homedir(), '.dsh', 'auto-press')
 const CONFIG_FILE = path.join(DIR, 'config.json')
-const DEFAULTS = { goalLock: true, lockPerms: true, strictOutside: true, lockPlugins: true, localOnly: false, protectedPaths: [], extraRoots: [] }
+const DEFAULTS = { goalLock: true, lockPerms: true, strictOutside: true, lockPlugins: true, localOnly: false, approveWithoutTab: false, protectedPaths: [], extraRoots: [] }
 
 function loadConfig() {
   try {
@@ -30,6 +30,7 @@ function loadConfig() {
       strictOutside: raw.strictOutside !== false,
       lockPlugins: raw.lockPlugins !== false,
       localOnly: raw.localOnly === true,
+      approveWithoutTab: raw.approveWithoutTab === true,
       protectedPaths: Array.isArray(raw.protectedPaths)
         ? raw.protectedPaths.filter((p) => typeof p === 'string' && p.trim())
         : [],
@@ -73,6 +74,7 @@ export function apply(ctx) {
     '/home/j0schi/Program/Strata/Continue_Plugin_Harness',
   ]
   const PLUGIN_PKG_CMD = /(^|[\s;&|])(pnpm|npm|yarn)\s+(add|remove|uninstall|install|i)\b/
+  const pending = new Map()
   const WEB_TOOLS = new Set(['web_search', 'web_fetch'])
   const FETCH_CMD = /(^|[\s;&|])(curl|wget|git|pip3?|npm|pnpm|yarn|apt|apt-get|ssh|scp|rsync|nc|socat)\b/
 
@@ -101,6 +103,13 @@ export function apply(ctx) {
     const tool = String((exec && exec.name) || '')
     const args = (exec && exec.arguments) || {}
     try {
+      if (exec && exec.callId) {
+        pending.set(String(exec.callId), { tool, args, at: Date.now() })
+        if (pending.size > 500) {
+          const oldest = pending.keys().next().value
+          pending.delete(oldest)
+        }
+      }
       if (cfg.goalLock && (tool === 'create_goal' || tool === 'update_goal')) {
         return {
           kind: 'deny',
@@ -200,6 +209,50 @@ export function apply(ctx) {
     return next()
   })
 
+  function safeForApproval(tool, args) {
+    if (cfg.goalLock && (tool === 'create_goal' || tool === 'update_goal')) return false
+    if (cfg.localOnly && WEB_TOOLS.has(tool)) return false
+    if (FILE_TOOLS.has(tool)) {
+      const target = args.file_path || args.path || args.target
+      if (target && cfg.lockPlugins && underRoots(target, PLUGIN_ROOTS)) return false
+      if (target && cfg.strictOutside && !underRoots(target, cfg.extraRoots) && CRITICAL_PATH.test(String(target))) return false
+      if (isProtected(target, cfg.protectedPaths)) return false
+    }
+    if (tool === 'bash' && typeof args.command === 'string') {
+      const cmd = args.command
+      if (cfg.localOnly && FETCH_CMD.test(cmd) && !/127\.0\.0\.1|localhost|::1/.test(cmd)) return false
+      if (cfg.lockPerms && BASH_PERMS.test(cmd)) return false
+      if (cfg.strictOutside && NET_CMD.test(cmd)) return false
+      if (cfg.strictOutside && SYS_CMD.test(cmd)) return false
+      if (cfg.lockPlugins) {
+        const touches = PLUGIN_ROOTS.some((r) => cmd.includes(r)) || /\.dsh\/profiles|\.dsh\/plugins/.test(cmd)
+        if (touches && (BASH_WRITE.test(cmd) || PLUGIN_PKG_CMD.test(cmd))) return false
+      }
+      if (BASH_WRITE.test(cmd)) {
+        for (const p of cfg.protectedPaths) if (cmd.includes(p)) return false
+      }
+    }
+    return true
+  }
+
+  // Одобрение без открытой вкладки проекта: выполняется раньше auto-approve и
+  // одобряет только те вызовы, которые проходят все наши проверки.
+  ctx.on('approval/request', async (req, next) => {
+    try {
+      if (!cfg.approveWithoutTab) return next()
+      const id = String((req && req.callId) || '')
+      const rec = id ? pending.get(id) : undefined
+      if (!rec) return next()
+      if (safeForApproval(rec.tool, rec.args)) {
+        pending.delete(id)
+        return 'allowed-once'
+      }
+    } catch (error) {
+      warn(`[dsh-auto-press] approval check failed: ${error}`)
+    }
+    return next()
+  }, { prepend: true })
+
   function sessionCwd(sessionId) {
     try {
       const agents = services && services.agents
@@ -262,6 +315,7 @@ export function apply(ctx) {
         strictOutside: cfg.strictOutside,
         lockPlugins: cfg.lockPlugins,
         localOnly: cfg.localOnly,
+        approveWithoutTab: cfg.approveWithoutTab,
         protectedPaths: cfg.protectedPaths,
         extraRoots: cfg.extraRoots,
         candidates: candidates(p.sessionId),
@@ -298,6 +352,11 @@ export function apply(ctx) {
       cfg.localOnly = !!p.enabled
       saveConfig(cfg)
       return { localOnly: cfg.localOnly }
+    }
+    if (endpoint === 'setApproveWithoutTab') {
+      cfg.approveWithoutTab = !!p.enabled
+      saveConfig(cfg)
+      return { approveWithoutTab: cfg.approveWithoutTab }
     }
     if (endpoint === 'setProtected') {
       const cwd = sessionCwd(p.sessionId)
