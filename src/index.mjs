@@ -19,7 +19,7 @@ export const inject = ['agents', 'goals']
 
 const DIR = path.join(os.homedir(), '.dsh', 'auto-press')
 const CONFIG_FILE = path.join(DIR, 'config.json')
-const DEFAULTS = { goalLock: true, lockPerms: true, protectedPaths: [] }
+const DEFAULTS = { goalLock: true, lockPerms: true, strictOutside: true, lockPlugins: true, localOnly: false, protectedPaths: [], extraRoots: [] }
 
 function loadConfig() {
   try {
@@ -27,8 +27,14 @@ function loadConfig() {
     return {
       goalLock: raw.goalLock !== false,
       lockPerms: raw.lockPerms !== false,
+      strictOutside: raw.strictOutside !== false,
+      lockPlugins: raw.lockPlugins !== false,
+      localOnly: raw.localOnly === true,
       protectedPaths: Array.isArray(raw.protectedPaths)
         ? raw.protectedPaths.filter((p) => typeof p === 'string' && p.trim())
+        : [],
+      extraRoots: Array.isArray(raw.extraRoots)
+        ? raw.extraRoots.filter((p) => typeof p === 'string' && p.trim())
         : [],
     }
   } catch {
@@ -44,6 +50,12 @@ function saveConfig(cfg) {
 const FILE_TOOLS = new Set(['write', 'edit', 'apply_patch', 'multiedit', 'str_replace', 'create_file'])
 const BASH_WRITE = /(^|[\s;&|])(>|>>|tee\b|sed\s+-i\b|cp\b|mv\b|rm\b|truncate\b|install\b|patch\b|touch\b)/
 const BASH_PERMS = /(^|[\s;&|])(chmod|chown|chgrp|chattr|setfacl|setfattr)\b/
+// Сетевые настройки: запрещены вне разрешённых папок (доп. слой защиты системы).
+const NET_CMD = /(^|[\s;&|])(nmcli|nmtui|ip\s+(addr|a|route|r|link|rule|neigh|netns)|iptables|ip6tables|nft|ufw|firewall-cmd|resolvectl|systemd-resolve|networkctl|wpa_supplicant|wpa_cli|dhclient|dhcpcd|ifconfig|route|hostnamectl|timedatectl|netplan)\b/
+// Системные изменения: пакеты, юниты, монтирование, пользователи, загрузчик.
+const SYS_CMD = /(^|[\s;&|])(apt|apt-get|dpkg|snap|mount|umount|modprobe|insmod|rmmod|reboot|shutdown|poweroff|halt|systemctl\s+(start|stop|restart|reload|disable|enable|mask|unmask|daemon-reload)|useradd|usermod|userdel|passwd|chpasswd|crontab|visudo|ldconfig|update-grub|mkfs|fdisk|parted)\b/
+// Запись в системные каталоги — запрещена вне разрешённых папок.
+const CRITICAL_PATH = /^\/(etc|usr|boot|lib|lib64|bin|sbin|var|opt|root|proc|sys|snap|run)(\/|$)/
 
 export function apply(ctx) {
   const log = ctx && ctx.logger && typeof ctx.logger.info === 'function'
@@ -54,7 +66,26 @@ export function apply(ctx) {
     : console.warn
   const cfg = loadConfig()
 
+  const PLUGIN_ROOTS = [
+    path.join(os.homedir(), '.dsh', 'profiles'),
+    path.join(os.homedir(), '.dsh', 'plugins'),
+    path.join(os.homedir(), '.dsh', 'node_modules'),
+    '/home/j0schi/Program/Strata/Continue_Plugin_Harness',
+  ]
+  const PLUGIN_PKG_CMD = /(^|[\s;&|])(pnpm|npm|yarn)\s+(add|remove|uninstall|install|i)\b/
+  const WEB_TOOLS = new Set(['web_search', 'web_fetch'])
+  const FETCH_CMD = /(^|[\s;&|])(curl|wget|git|pip3?|npm|pnpm|yarn|apt|apt-get|ssh|scp|rsync|nc|socat)\b/
+
   const norm = (p) => path.resolve(String(p)).replace(/\/+$/, '')
+
+  function underRoots(target, roots) {
+    if (!target) return false
+    const abs = norm(target)
+    return roots.some((r) => {
+      const root = norm(r)
+      return abs === root || abs.startsWith(root + '/')
+    })
+  }
 
   function isProtected(target, list) {
     if (!target) return null
@@ -77,9 +108,30 @@ export function apply(ctx) {
             + 'Из текста/контекста менять goal нельзя: попросите пользователя нажать кнопку.',
         }
       }
+      if (cfg.localOnly && WEB_TOOLS.has(tool)) {
+        return {
+          kind: 'deny',
+          reason: 'Режим «без интернета» включён: веб-поиск и загрузка страниц агенту запрещены. '
+            + 'Попросите пользователя выключить кнопку «Без интернета».',
+        }
+      }
       if (FILE_TOOLS.has(tool)) {
         const target = args.file_path || args.path || args.target
+        if (target && cfg.strictOutside && !underRoots(target, cfg.extraRoots) && CRITICAL_PATH.test(String(target))) {
+          return {
+            kind: 'deny',
+            reason: `Запись в системный каталог «${target}» запрещена: это не рабочая папка проекта. `
+              + 'Добавьте каталог в «Настройки», только если правка действительно нужна.',
+          }
+        }
         const hit = isProtected(target, cfg.protectedPaths)
+        if (target && cfg.lockPlugins && underRoots(target, PLUGIN_ROOTS)) {
+          return {
+            kind: 'deny',
+            reason: `Плагины защищены (кнопка «Плагины»): менять «${target}» агенту нельзя. `
+              + 'Попросите пользователя выключить защиту плагинов.',
+          }
+        }
         if (hit) {
           return {
             kind: 'deny',
@@ -90,6 +142,39 @@ export function apply(ctx) {
       }
       if (tool === 'bash' && typeof args.command === 'string') {
         const cmd = args.command
+        const inRoots = cfg.extraRoots.some((r) => cmd.includes(r))
+        if (cfg.localOnly && FETCH_CMD.test(cmd) && !/127\.0\.0\.1|localhost|::1/.test(cmd)) {
+          return {
+            kind: 'deny',
+            reason: 'Режим «без интернета» включён: сетевые загрузки (curl/wget/git/npm/…) запрещены. '
+              + 'Попросите пользователя выключить кнопку «Без интернета».',
+          }
+        }
+        if (cfg.lockPlugins) {
+          const touchesPlugins = PLUGIN_ROOTS.some((r) => cmd.includes(r))
+            || /\.dsh\/profiles|\.dsh\/plugins/.test(cmd)
+          if (touchesPlugins && (BASH_WRITE.test(cmd) || PLUGIN_PKG_CMD.test(cmd))) {
+            return {
+              kind: 'deny',
+              reason: 'Плагины защищены (кнопка «Плагины»): менять, переписывать или добавлять плагины агенту нельзя. '
+                + 'Попросите пользователя выключить защиту плагинов.',
+            }
+          }
+        }
+        if (cfg.strictOutside && !inRoots && NET_CMD.test(cmd)) {
+          return {
+            kind: 'deny',
+            reason: 'Сетевые настройки менять запрещено (nmcli/ip/iptables/nft/resolvectl…). '
+              + 'Это защита системы, а не часть задачи.',
+          }
+        }
+        if (cfg.strictOutside && !inRoots && SYS_CMD.test(cmd)) {
+          return {
+            kind: 'deny',
+            reason: 'Системные изменения (пакеты, юниты, монтирование, пользователи) запрещены. '
+              + 'Это защита системы, а не часть задачи.',
+          }
+        }
         if (cfg.lockPerms && BASH_PERMS.test(cmd)) {
           return {
             kind: 'deny',
@@ -174,7 +259,11 @@ export function apply(ctx) {
       return {
         goalLock: cfg.goalLock,
         lockPerms: cfg.lockPerms,
+        strictOutside: cfg.strictOutside,
+        lockPlugins: cfg.lockPlugins,
+        localOnly: cfg.localOnly,
         protectedPaths: cfg.protectedPaths,
+        extraRoots: cfg.extraRoots,
         candidates: candidates(p.sessionId),
       }
     }
@@ -187,6 +276,28 @@ export function apply(ctx) {
       cfg.lockPerms = !!p.enabled
       saveConfig(cfg)
       return { lockPerms: cfg.lockPerms }
+    }
+    if (endpoint === 'setExtraRoots') {
+      const cwd = sessionCwd(p.sessionId)
+      const list = Array.isArray(p.paths) ? p.paths : []
+      cfg.extraRoots = Array.from(new Set(list.map((s) => resolvePath(s, cwd)).filter(Boolean)))
+      saveConfig(cfg)
+      return { extraRoots: cfg.extraRoots }
+    }
+    if (endpoint === 'setStrictOutside') {
+      cfg.strictOutside = !!p.enabled
+      saveConfig(cfg)
+      return { strictOutside: cfg.strictOutside }
+    }
+    if (endpoint === 'setLockPlugins') {
+      cfg.lockPlugins = !!p.enabled
+      saveConfig(cfg)
+      return { lockPlugins: cfg.lockPlugins }
+    }
+    if (endpoint === 'setLocalOnly') {
+      cfg.localOnly = !!p.enabled
+      saveConfig(cfg)
+      return { localOnly: cfg.localOnly }
     }
     if (endpoint === 'setProtected') {
       const cwd = sessionCwd(p.sessionId)

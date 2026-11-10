@@ -184,6 +184,11 @@ window.__ModuleLoader__.load({
       const [goal, setGoal] = React.useState('')
       const [goalLock, setGoalLock] = React.useState(true)
       const [lockPerms, setLockPerms] = React.useState(true)
+      const [strictOutside, setStrictOutside] = React.useState(true)
+      const [lockPlugins, setLockPlugins] = React.useState(true)
+      const [localOnly, setLocalOnly] = React.useState(false)
+      const [roots, setRoots] = React.useState([])
+      const [addRoot, setAddRoot] = React.useState('')
       const [paths, setPaths] = React.useState([])
       const [items, setItems] = React.useState([])
       const [addPath, setAddPath] = React.useState('')
@@ -200,12 +205,16 @@ window.__ModuleLoader__.load({
           setItems(all)
           setGoalLock(v.goalLock !== false)
           setLockPerms(v.lockPerms !== false)
+          setStrictOutside(v.strictOutside !== false)
+          setLockPlugins(v.lockPlugins !== false)
+          setLocalOnly(v.localOnly === true)
+          setRoots(v.extraRoots || [])
         }).catch((e) => setErr(String(e.message || e))).finally(() => setBusy(false))
       }
 
       function openDialog(which) {
         setOpen(which); setMsg(''); setErr('')
-        if (which === 'files') load()
+        if (which === 'files' || which === 'settings') load()
       }
 
       function submitGoal() {
@@ -215,6 +224,44 @@ window.__ModuleLoader__.load({
           setMsg('Цель установлена: ' + (v.objective || '').slice(0, 120))
           setGoal('')
         }).catch((e) => setErr(String(e.message || e))).finally(() => setBusy(false))
+      }
+
+      function toggleStrict() {
+        const next = !strictOutside
+        rpc('setStrictOutside', { enabled: next }).then((v) => {
+          setStrictOutside(v.strictOutside !== false)
+          setMsg(v.strictOutside ? 'Опасные команды вне разрешённых папок запрещены' : 'Проверка опасных команд выключена')
+        }).catch((e) => setErr(String(e.message || e)))
+      }
+
+      function togglePlugins() {
+        const next = !lockPlugins
+        rpc('setLockPlugins', { enabled: next }).then((v) => {
+          setLockPlugins(v.lockPlugins !== false)
+          setMsg(v.lockPlugins ? 'Плагины защищены от изменений агентом' : 'Агенту разрешено менять плагины')
+        }).catch((e) => setErr(String(e.message || e)))
+      }
+
+      function toggleLocalOnly() {
+        const next = !localOnly
+        rpc('setLocalOnly', { enabled: next }).then((v) => {
+          setLocalOnly(v.localOnly === true)
+          setMsg(v.localOnly ? 'Режим «без интернета» включён: веб-инструменты и сетевые загрузки запрещены' : 'Интернет-доступ агенту разрешён')
+        }).catch((e) => setErr(String(e.message || e)))
+      }
+
+      function saveRoots() {        setBusy(true); setErr('')
+        rpc('setExtraRoots', { sessionId, paths: roots }).then((v) => {
+          setRoots(v.extraRoots || [])
+          setMsg('Сохранено: разрешённых папок ' + (v.extraRoots || []).length)
+        }).catch((e) => setErr(String(e.message || e))).finally(() => setBusy(false))
+      }
+
+      function addRootToList() {
+        const p = addRoot.trim()
+        if (!p) return
+        if (!roots.includes(p)) setRoots((prev) => [...prev, p])
+        setAddRoot('')
       }
 
       function togglePath(p, on) {
@@ -258,6 +305,9 @@ window.__ModuleLoader__.load({
       const buttons = e('div', { className: 'dap-bar' },
         e('button', { className: 'dap-btn' + (goalLock ? ' dap-btn-on' : ''), onClick: () => openDialog('goal'), title: 'Задать цель вручную (модель не может)' }, '🎯 Цель'),
         e('button', { className: 'dap-btn' + (paths.length ? ' dap-btn-on' : ''), onClick: () => openDialog('files'), title: 'Защитить файлы от изменений агентом' }, '🗂 Файлы' + (paths.length ? ' · ' + paths.length : '')),
+        e('button', { className: 'dap-btn' + (roots.length ? ' dap-btn-on' : ''), onClick: () => openDialog('settings'), title: 'Разрешённые папки и защита системы' }, '⚙️ Настройки' + (roots.length ? ' · ' + roots.length : '')),
+        e('button', { className: 'dap-btn' + (lockPlugins ? ' dap-btn-on' : ''), onClick: togglePlugins, title: 'Запретить агенту менять, переписывать и добавлять плагины' }, '🔌 Плагины'),
+        e('button', { className: 'dap-btn' + (localOnly ? ' dap-btn-on' : ''), onClick: toggleLocalOnly, title: 'Запретить агенту выход в интернет (веб-поиск и сетевые загрузки)' }, '🏠 Без интернета'),
       )
 
       let dialog = null
@@ -301,6 +351,35 @@ window.__ModuleLoader__.load({
             e('div', { className: 'dap-actions' },
               e('button', { className: 'dap-btn', onClick: () => setOpen(null) }, 'Закрыть'),
               e('button', { className: 'dap-btn dap-primary', disabled: busy, onClick: saveFiles }, busy ? '…' : 'Сохранить'),
+            ),
+          ),
+        )
+      } else if (open === 'settings') {
+        dialog = e('div', { className: 'dap-dialog', onClick: (ev) => { if (ev.target === ev.currentTarget) setOpen(null) } },
+          e('div', { className: 'dap-card' },
+            e('div', { className: 'dap-title' }, 'Настройки авто-разрешений и защиты системы'),
+            e('div', { className: 'dap-sub' }, 'В этих папках агенту разрешены все операции (напр. два воркспейса сразу). Вне их — работают проверки ниже.'),
+            e('div', { className: 'dap-list' },
+              roots.length === 0
+                ? e('div', { className: 'dap-sub' }, 'Пока нет разрешённых папок — действует только рабочая папка сессии.')
+                : roots.map((p) => e('label', { className: 'dap-item', key: p },
+                    e('input', { type: 'checkbox', checked: true, onChange: () => setRoots((prev) => prev.filter((x) => x !== p)) }),
+                    e('span', null, p),
+                  )),
+            ),
+            e('div', { className: 'dap-actions' },
+              e('input', { className: 'dap-textarea', style: { minHeight: 0, height: 30, flex: '1 1 auto' }, value: addRoot, placeholder: 'Добавить папку (путь)…', onChange: (ev) => setAddRoot(ev.target.value) }),
+              e('button', { className: 'dap-btn', onClick: addRootToList }, 'Добавить'),
+            ),
+            e('label', { className: 'dap-item' },
+              e('input', { type: 'checkbox', checked: strictOutside, onChange: toggleStrict }),
+              e('span', null, 'Запрещать опасные команды вне разрешённых папок'),
+            ),
+            e('div', { className: 'dap-sub' }, 'Блокируются: смена сетевых настроек (nmcli/ip/iptables/nft/resolvectl), пакеты, монтирование, юниты systemd, пользователи, запись в /etc, /usr, /boot, /lib, /var, /opt.'),
+            e('div', { className: 'dap-msg' + (err ? ' dap-msg-err' : '') }, err || msg),
+            e('div', { className: 'dap-actions' },
+              e('button', { className: 'dap-btn', onClick: () => setOpen(null) }, 'Закрыть'),
+              e('button', { className: 'dap-btn dap-primary', disabled: busy, onClick: saveRoots }, busy ? '…' : 'Сохранить папки'),
             ),
           ),
         )
