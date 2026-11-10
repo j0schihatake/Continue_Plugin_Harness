@@ -1,7 +1,7 @@
 {
   "name": "dsh-auto-press",
-  "version": "0.1.1",
-  "description": "Auto-press 'Allow once' in the DSH web approval dialog and resume a stopped goal",
+  "version": "0.2.0",
+  "description": "Auto-press 'Allow once', resume a stopped goal, plus manual-only goal lock and a protected-files list (AGENTS.md, skills, launch scripts) that the agent cannot edit",
   "type": "module",
   "main": "./src/index.mjs",
   "exports": {
