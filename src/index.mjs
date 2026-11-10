@@ -126,6 +126,13 @@ export function apply(ctx) {
       }
       if (FILE_TOOLS.has(tool)) {
         const target = args.file_path || args.path || args.target
+        if (target && underRoots(target, [DIR])) {
+          return {
+            kind: 'deny',
+            reason: 'Настройки плагина защищены: менять config.json агенту нельзя. '
+              + 'Состояние кнопок задаёт только пользователь в интерфейсе.',
+          }
+        }
         if (target && cfg.strictOutside && !underRoots(target, cfg.extraRoots) && CRITICAL_PATH.test(String(target))) {
           return {
             kind: 'deny',
@@ -152,6 +159,12 @@ export function apply(ctx) {
       if (tool === 'bash' && typeof args.command === 'string') {
         const cmd = args.command
         const inRoots = cfg.extraRoots.some((r) => cmd.includes(r))
+        if (cmd.includes(DIR) && BASH_WRITE.test(cmd)) {
+          return {
+            kind: 'deny',
+            reason: 'Настройки плагина защищены: менять его config.json командой агенту нельзя.',
+          }
+        }
         if (cfg.localOnly && FETCH_CMD.test(cmd) && !/127\.0\.0\.1|localhost|::1/.test(cmd)) {
           return {
             kind: 'deny',

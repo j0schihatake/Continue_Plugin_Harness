@@ -219,6 +219,8 @@ window.__ModuleLoader__.load({
         if (which === 'files' || which === 'settings') load()
       }
 
+      React.useEffect(function () { load() }, [])
+
       function submitGoal() {
         if (!goal.trim()) return
         setBusy(true); setErr('')
