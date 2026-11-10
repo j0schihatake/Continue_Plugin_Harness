@@ -19,7 +19,7 @@ export const inject = ['agents', 'goals']
 
 const DIR = path.join(os.homedir(), '.dsh', 'auto-press')
 const CONFIG_FILE = path.join(DIR, 'config.json')
-const DEFAULTS = { goalLock: true, lockPerms: true, strictOutside: true, lockPlugins: true, localOnly: false, approveWithoutTab: false, protectedPaths: [], extraRoots: [] }
+const DEFAULTS = { goalLock: true, lockPerms: true, strictOutside: true, lockPlugins: true, approveWithoutTab: false, protectedPaths: [], extraRoots: [] }
 
 function loadConfig() {
   try {
@@ -29,7 +29,6 @@ function loadConfig() {
       lockPerms: raw.lockPerms !== false,
       strictOutside: raw.strictOutside !== false,
       lockPlugins: raw.lockPlugins !== false,
-      localOnly: raw.localOnly === true,
       approveWithoutTab: raw.approveWithoutTab === true,
       protectedPaths: Array.isArray(raw.protectedPaths)
         ? raw.protectedPaths.filter((p) => typeof p === 'string' && p.trim())
@@ -75,8 +74,6 @@ export function apply(ctx) {
   ]
   const PLUGIN_PKG_CMD = /(^|[\s;&|])(pnpm|npm|yarn)\s+(add|remove|uninstall|install|i)\b/
   const pending = new Map()
-  const WEB_TOOLS = new Set(['web_search', 'web_fetch'])
-  const FETCH_CMD = /(^|[\s;&|])(curl|wget|git|pip3?|npm|pnpm|yarn|apt|apt-get|ssh|scp|rsync|nc|socat)\b/
 
   const norm = (p) => path.resolve(String(p)).replace(/\/+$/, '')
 
@@ -115,13 +112,6 @@ export function apply(ctx) {
           kind: 'deny',
           reason: 'Цель меняется только человеком через кнопку «Цель» над полем ввода. '
             + 'Из текста/контекста менять goal нельзя: попросите пользователя нажать кнопку.',
-        }
-      }
-      if (cfg.localOnly && WEB_TOOLS.has(tool)) {
-        return {
-          kind: 'deny',
-          reason: 'Режим «без интернета» включён: веб-поиск и загрузка страниц агенту запрещены. '
-            + 'Попросите пользователя выключить кнопку «Без интернета».',
         }
       }
       if (FILE_TOOLS.has(tool)) {
@@ -163,13 +153,6 @@ export function apply(ctx) {
           return {
             kind: 'deny',
             reason: 'Настройки плагина защищены: менять его config.json командой агенту нельзя.',
-          }
-        }
-        if (cfg.localOnly && FETCH_CMD.test(cmd) && !/127\.0\.0\.1|localhost|::1/.test(cmd)) {
-          return {
-            kind: 'deny',
-            reason: 'Режим «без интернета» включён: сетевые загрузки (curl/wget/git/npm/…) запрещены. '
-              + 'Попросите пользователя выключить кнопку «Без интернета».',
           }
         }
         if (cfg.lockPlugins) {
@@ -224,7 +207,6 @@ export function apply(ctx) {
 
   function safeForApproval(tool, args) {
     if (cfg.goalLock && (tool === 'create_goal' || tool === 'update_goal')) return false
-    if (cfg.localOnly && WEB_TOOLS.has(tool)) return false
     if (FILE_TOOLS.has(tool)) {
       const target = args.file_path || args.path || args.target
       if (target && cfg.lockPlugins && underRoots(target, PLUGIN_ROOTS)) return false
@@ -233,7 +215,6 @@ export function apply(ctx) {
     }
     if (tool === 'bash' && typeof args.command === 'string') {
       const cmd = args.command
-      if (cfg.localOnly && FETCH_CMD.test(cmd) && !/127\.0\.0\.1|localhost|::1/.test(cmd)) return false
       if (cfg.lockPerms && BASH_PERMS.test(cmd)) return false
       if (cfg.strictOutside && NET_CMD.test(cmd)) return false
       if (cfg.strictOutside && SYS_CMD.test(cmd)) return false
@@ -327,7 +308,6 @@ export function apply(ctx) {
         lockPerms: cfg.lockPerms,
         strictOutside: cfg.strictOutside,
         lockPlugins: cfg.lockPlugins,
-        localOnly: cfg.localOnly,
         approveWithoutTab: cfg.approveWithoutTab,
         protectedPaths: cfg.protectedPaths,
         extraRoots: cfg.extraRoots,
@@ -360,11 +340,6 @@ export function apply(ctx) {
       cfg.lockPlugins = !!p.enabled
       saveConfig(cfg)
       return { lockPlugins: cfg.lockPlugins }
-    }
-    if (endpoint === 'setLocalOnly') {
-      cfg.localOnly = !!p.enabled
-      saveConfig(cfg)
-      return { localOnly: cfg.localOnly }
     }
     if (endpoint === 'setApproveWithoutTab') {
       cfg.approveWithoutTab = !!p.enabled

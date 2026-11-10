@@ -1,7 +1,7 @@
 {
   "name": "dsh-auto-press",
-  "version": "0.5.1",
-  "description": "Auto-press 'Allow once', resume a stopped goal, manual-only goal lock, protected-files list and chmod/chown lock for the agent",
+  "version": "0.6.0",
+  "description": "Auto-press, manual goal lock, protected files, chmod/chown lock, extra allowed dirs, system command interceptor, plugin protection, no-internet mode that also switches the harness to the local Strata model",
   "type": "module",
   "main": "./src/index.mjs",
   "exports": {
