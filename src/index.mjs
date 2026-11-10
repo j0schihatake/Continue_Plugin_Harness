@@ -15,6 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 export const name = 'dsh-auto-press'
+export const inject = ['agents', 'goals']
 
 const DIR = path.join(os.homedir(), '.dsh', 'auto-press')
 const CONFIG_FILE = path.join(DIR, 'config.json')
@@ -116,7 +117,8 @@ export function apply(ctx) {
 
   function sessionCwd(sessionId) {
     try {
-      const agent = sessionId && ctx.agents ? ctx.agents.get(sessionId) : undefined
+      const agents = services && services.agents
+      const agent = sessionId && agents ? agents.get(sessionId) : undefined
       const header = agent && agent.session && agent.session.header
       if (header && typeof header.cwd === 'string') return header.cwd
     } catch {}
@@ -149,16 +151,21 @@ export function apply(ctx) {
     return Array.from(out)
   }
 
+  let services = null
+
   async function setGoal(sessionId, objective) {
     const text = String(objective || '').trim()
     if (!text) throw new Error('пустая цель')
-    const agent = sessionId && ctx.agents ? ctx.agents.get(sessionId) : undefined
+    const agents = services && services.agents
+    const goals = services && services.goals
+    if (!agents) throw new Error('сервис агентов недоступен')
+    if (!goals) throw new Error('сервис целей недоступен')
+    const agent = sessionId ? agents.get(sessionId) : undefined
     if (!agent) throw new Error('нет активного агента для этой сессии')
-    if (!ctx.goals) throw new Error('сервис целей недоступен')
-    const current = ctx.goals.get(agent)
-    if (!current) return ctx.goals.create(agent, { objective: text })
-    if (current.phase === 'complete') return ctx.goals.create(agent, { objective: text })
-    return ctx.goals.edit(agent, { id: current.id, revision: current.revision }, { objective: text })
+    const current = goals.get(agent)
+    if (!current) return goals.create(agent, { objective: text })
+    if (current.phase === 'complete') return goals.create(agent, { objective: text })
+    return goals.edit(agent, { id: current.id, revision: current.revision }, { objective: text })
   }
 
   async function dispatch(endpoint, payload) {
@@ -197,7 +204,8 @@ export function apply(ctx) {
     throw new Error(`unknown endpoint ${endpoint}`)
   }
 
-  ctx.inject(['connection'], (c) => {
+  ctx.inject(['connection', 'agents', 'goals'], (c) => {
+    services = c
     const connection = c.connection
     if (!connection || !connection.fetch || typeof connection.fetch.register !== 'function') {
       warn('[dsh-auto-press] connection.fetch недоступен — кнопки в UI не заработают')
@@ -217,7 +225,7 @@ export function apply(ctx) {
         return Response.json({
           type: 'server-response',
           rpcId,
-          result: { ok: false, error: { code: 'err.internal', message: String((error && error.message) || error) } },
+          result: { ok: false, error: { code: 'err.internal', message: String((error && error.message) || error), details: {} } },
         })
       }
     }
