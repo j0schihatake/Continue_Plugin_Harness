@@ -7,6 +7,7 @@
  *      цель задаёт только человек кнопкой «Цель» (client.js → RPC setGoal).
  *    - protectedPaths: перечисленные файлы (AGENTS.md, навыки, скрипты запуска…)
  *      модель не может менять ни write/edit, ни bash-командой записи.
+ *    - lockPerms: модель не может менять права (chmod/chattr) и владельца (chown).
  *      Модель получает отказ и должна попросить человека снять галку.
  */
 import fs from 'node:fs'
@@ -17,13 +18,14 @@ export const name = 'dsh-auto-press'
 
 const DIR = path.join(os.homedir(), '.dsh', 'auto-press')
 const CONFIG_FILE = path.join(DIR, 'config.json')
-const DEFAULTS = { goalLock: true, protectedPaths: [] }
+const DEFAULTS = { goalLock: true, lockPerms: true, protectedPaths: [] }
 
 function loadConfig() {
   try {
     const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))
     return {
       goalLock: raw.goalLock !== false,
+      lockPerms: raw.lockPerms !== false,
       protectedPaths: Array.isArray(raw.protectedPaths)
         ? raw.protectedPaths.filter((p) => typeof p === 'string' && p.trim())
         : [],
@@ -39,7 +41,8 @@ function saveConfig(cfg) {
 }
 
 const FILE_TOOLS = new Set(['write', 'edit', 'apply_patch', 'multiedit', 'str_replace', 'create_file'])
-const BASH_WRITE = /(^|[\s;&|])(>|>>|tee\b|sed\s+-i\b|cp\b|mv\b|rm\b|truncate\b|install\b|patch\b|touch\b|chmod\b|chattr\b)/
+const BASH_WRITE = /(^|[\s;&|])(>|>>|tee\b|sed\s+-i\b|cp\b|mv\b|rm\b|truncate\b|install\b|patch\b|touch\b)/
+const BASH_PERMS = /(^|[\s;&|])(chmod|chown|chgrp|chattr|setfacl|setfattr)\b/
 
 export function apply(ctx) {
   const log = ctx && ctx.logger && typeof ctx.logger.info === 'function'
@@ -86,6 +89,13 @@ export function apply(ctx) {
       }
       if (tool === 'bash' && typeof args.command === 'string') {
         const cmd = args.command
+        if (cfg.lockPerms && BASH_PERMS.test(cmd)) {
+          return {
+            kind: 'deny',
+            reason: 'Менять права (chmod/chattr) и владельца (chown) файлов агенту запрещено '
+              + '(кнопка «Файлы»). Попросите пользователя снять галку «права и владелец».',
+          }
+        }
         if (BASH_WRITE.test(cmd)) {
           for (const p of cfg.protectedPaths) {
             if (cmd.includes(p)) {
@@ -104,14 +114,25 @@ export function apply(ctx) {
     return next()
   })
 
-  function candidates(sessionId) {
-    const out = new Set(cfg.protectedPaths)
-    let cwd = ''
+  function sessionCwd(sessionId) {
     try {
       const agent = sessionId && ctx.agents ? ctx.agents.get(sessionId) : undefined
       const header = agent && agent.session && agent.session.header
-      if (header && typeof header.cwd === 'string') cwd = header.cwd
+      if (header && typeof header.cwd === 'string') return header.cwd
     } catch {}
+    return ''
+  }
+
+  function resolvePath(p, cwd) {
+    const s = String(p || '').trim()
+    if (!s) return ''
+    if (path.isAbsolute(s)) return path.normalize(s)
+    return cwd ? path.resolve(cwd, s) : s
+  }
+
+  function candidates(sessionId) {
+    const out = new Set(cfg.protectedPaths)
+    const cwd = sessionCwd(sessionId)
     const add = (p) => { try { out.add(p) } catch {} }
     if (cwd) {
       add(path.join(cwd, 'AGENTS.md'))
@@ -143,16 +164,29 @@ export function apply(ctx) {
   async function dispatch(endpoint, payload) {
     const p = payload && typeof payload === 'object' ? payload : {}
     if (endpoint === 'snapshot') {
-      return { goalLock: cfg.goalLock, protectedPaths: cfg.protectedPaths, candidates: candidates(p.sessionId) }
+      return {
+        goalLock: cfg.goalLock,
+        lockPerms: cfg.lockPerms,
+        protectedPaths: cfg.protectedPaths,
+        candidates: candidates(p.sessionId),
+      }
     }
     if (endpoint === 'setGoalLock') {
       cfg.goalLock = !!p.enabled
       saveConfig(cfg)
       return { goalLock: cfg.goalLock }
     }
+    if (endpoint === 'setLockPerms') {
+      cfg.lockPerms = !!p.enabled
+      saveConfig(cfg)
+      return { lockPerms: cfg.lockPerms }
+    }
     if (endpoint === 'setProtected') {
+      const cwd = sessionCwd(p.sessionId)
       const list = Array.isArray(p.paths) ? p.paths : []
-      cfg.protectedPaths = Array.from(new Set(list.map((s) => String(s).trim()).filter(Boolean)))
+      cfg.protectedPaths = Array.from(new Set(
+        list.map((s) => resolvePath(s, cwd)).filter(Boolean),
+      ))
       saveConfig(cfg)
       return { protectedPaths: cfg.protectedPaths }
     }
@@ -199,5 +233,5 @@ export function apply(ctx) {
     log('[dsh-auto-press] RPC зарегистрирован: /api/dsh-auto-press')
   })
 
-  log(`[dsh-auto-press] loaded: goalLock=${cfg.goalLock}, protected=${cfg.protectedPaths.length}`)
+  log(`[dsh-auto-press] loaded: goalLock=${cfg.goalLock}, lockPerms=${cfg.lockPerms}, protected=${cfg.protectedPaths.length}`)
 }

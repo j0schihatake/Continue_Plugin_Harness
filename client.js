@@ -166,6 +166,12 @@ window.__ModuleLoader__.load({
             throw new Error((err && (err.message || err.code)) || 'RPC failed')
           }
           return r.value
+        }).catch((e) => {
+          let msg = String((e && e.message) || e)
+          if (/401|404|transport failure/i.test(msg)) {
+            msg += ' — похоже, серверная часть плагина ещё не загружена: перезапустите DSH (systemctl --user restart deepseek-harness) и обновите страницу'
+          }
+          throw new Error(msg)
         })
       }
     }
@@ -177,6 +183,7 @@ window.__ModuleLoader__.load({
       const [open, setOpen] = React.useState(null)
       const [goal, setGoal] = React.useState('')
       const [goalLock, setGoalLock] = React.useState(true)
+      const [lockPerms, setLockPerms] = React.useState(true)
       const [paths, setPaths] = React.useState([])
       const [items, setItems] = React.useState([])
       const [addPath, setAddPath] = React.useState('')
@@ -192,6 +199,7 @@ window.__ModuleLoader__.load({
           setPaths(protectedSet)
           setItems(all)
           setGoalLock(v.goalLock !== false)
+          setLockPerms(v.lockPerms !== false)
         }).catch((e) => setErr(String(e.message || e))).finally(() => setBusy(false))
       }
 
@@ -225,7 +233,16 @@ window.__ModuleLoader__.load({
         const next = !goalLock
         rpc('setGoalLock', { enabled: next }).then((v) => {
           setGoalLock(v.goalLock !== false)
+          setLockPerms(v.lockPerms !== false)
           setMsg(v.goalLock ? 'Смена цели из текста запрещена' : 'Смена цели из текста разрешена')
+        }).catch((e) => setErr(String(e.message || e)))
+      }
+
+      function togglePerms() {
+        const next = !lockPerms
+        rpc('setLockPerms', { enabled: next }).then((v) => {
+          setLockPerms(v.lockPerms !== false)
+          setMsg(v.lockPerms ? 'Менять права и владельца файлов агенту запрещено' : 'Агенту разрешено менять права и владельца')
         }).catch((e) => setErr(String(e.message || e)))
       }
 
@@ -265,6 +282,10 @@ window.__ModuleLoader__.load({
             e('label', { className: 'dap-item' },
               e('input', { type: 'checkbox', checked: goalLock, onChange: toggleLock }),
               e('span', null, 'Запретить агенту менять цель из текста'),
+            ),
+            e('label', { className: 'dap-item' },
+              e('input', { type: 'checkbox', checked: lockPerms, onChange: togglePerms }),
+              e('span', null, 'Запретить агенту менять права (chmod) и владельца (chown) файлов'),
             ),
             e('div', { className: 'dap-list' },
               items.map((p) => e('label', { className: 'dap-item', key: p },
