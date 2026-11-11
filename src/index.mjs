@@ -61,6 +61,14 @@ const CRITICAL_PATH = /^\/(etc|usr|boot|lib|lib64|bin|sbin|var|opt|root|proc|sys
 // не могут включить danger-full-access самостоятельно.
 const ADMIN_MARKER = path.join(DIR, 'admin-unlocked')
 
+// Единственные команды, которым danger-full-access разрешён без маркера:
+// запуск dev-игры. Составные команды и подстановки запрещены.
+function isGameLaunch(cmd) {
+  if (typeof cmd !== 'string' || cmd.length > 2000) return false
+  if (/[;&|`\n\r]|\$\(|<\(|>\(/.test(cmd)) return false
+  return /(^|\s)(\.\/tools\/launch_dev\.sh|bash\s+tools\/launch_dev\.sh)(\s|$)/.test(cmd)
+}
+
 export function apply(ctx) {
   const log = ctx && ctx.logger && typeof ctx.logger.info === 'function'
     ? ctx.logger.info.bind(ctx.logger)
@@ -121,7 +129,8 @@ export function apply(ctx) {
           pending.delete(oldest)
         }
       }
-      if (args && args.sandbox_permissions === 'danger-full-access' && !adminUnlocked()) {
+      if (args && args.sandbox_permissions === 'danger-full-access'
+        && !adminUnlocked() && !isGameLaunch(args.command)) {
         return {
           kind: 'deny',
           reason: 'Полный доступ (danger-full-access) выключен: включить его может только админ '
@@ -228,7 +237,8 @@ export function apply(ctx) {
   })
 
   function safeForApproval(tool, args) {
-    if (args && args.sandbox_permissions === 'danger-full-access' && !adminUnlocked()) return false
+    if (args && args.sandbox_permissions === 'danger-full-access'
+      && !adminUnlocked() && !isGameLaunch(args.command)) return false
     if (cfg.goalLock && (tool === 'create_goal' || tool === 'update_goal')) return false
     if (FILE_TOOLS.has(tool)) {
       const target = args.file_path || args.path || args.target
@@ -260,7 +270,8 @@ export function apply(ctx) {
       const id = String((req && req.callId) || '')
       const rec = id ? pending.get(id) : undefined
       if (!rec) return next()
-      if (rec.args && rec.args.sandbox_permissions === 'danger-full-access' && !adminUnlocked()) {
+      if (rec.args && rec.args.sandbox_permissions === 'danger-full-access'
+        && !adminUnlocked() && !isGameLaunch(rec.args.command)) {
         pending.delete(id)
         return 'rejected'
       }
