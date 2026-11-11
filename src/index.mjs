@@ -215,11 +215,17 @@ export function apply(ctx) {
         if (cfg.lockPlugins) {
           const touchesPlugins = PLUGIN_ROOTS.some((r) => cmd.includes(r))
             || /\.dsh\/profiles|\.dsh\/plugins/.test(cmd)
-          if (touchesPlugins && (BASH_WRITE.test(cmd) || PLUGIN_PKG_CMD.test(cmd))) {
-            return {
-              kind: 'deny',
-              reason: 'Плагины защищены (кнопка «Плагины»): менять, переписывать или добавлять плагины агенту нельзя. '
-                + 'Попросите пользователя выключить защиту плагинов.',
+          if (touchesPlugins) {
+            // Разрешены только явно читающие команды: иначе git reset/python -c
+            // обходят BASH_WRITE и правят плагин без «пишущих» слов.
+            const readOnly = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree|git\s+(status|log|diff|show|rev-parse|remote|branch))\b/
+            if (!readOnly.test(cmd)) {
+              return {
+                kind: 'deny',
+                reason: 'Плагины защищены (кнопка «Плагины»): менять, переписывать или добавлять плагины агенту нельзя '
+                  + '(разрешены только чтение и git status/log/diff). '
+                  + 'Попросите пользователя выключить защиту плагинов.',
+              }
             }
           }
         }
@@ -282,7 +288,8 @@ export function apply(ctx) {
       if (cfg.strictOutside && SYS_CMD.test(cmd)) return false
       if (cfg.lockPlugins) {
         const touches = PLUGIN_ROOTS.some((r) => cmd.includes(r)) || /\.dsh\/profiles|\.dsh\/plugins/.test(cmd)
-        if (touches && (BASH_WRITE.test(cmd) || PLUGIN_PKG_CMD.test(cmd))) return false
+        const readOnly = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree|git\s+(status|log|diff|show|rev-parse|remote|branch))\b/
+        if (touches && !readOnly.test(cmd)) return false
       }
       if (BASH_WRITE.test(cmd)) {
         for (const p of cfg.protectedPaths) if (cmd.includes(p)) return false
