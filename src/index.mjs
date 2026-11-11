@@ -19,7 +19,7 @@ export const inject = ['agents', 'goals']
 
 const DIR = path.join(os.homedir(), '.dsh', 'auto-press')
 const CONFIG_FILE = path.join(DIR, 'config.json')
-const DEFAULTS = { goalLock: true, lockPerms: true, strictOutside: true, lockPlugins: true, approveWithoutTab: false, protectedPaths: [], extraRoots: [] }
+const DEFAULTS = { goalLock: true, lockPerms: true, strictOutside: true, lockPlugins: true, approveWithoutTab: false, paranoid: false, protectedPaths: [], extraRoots: [] }
 
 function loadConfig() {
   try {
@@ -30,6 +30,7 @@ function loadConfig() {
       strictOutside: raw.strictOutside !== false,
       lockPlugins: raw.lockPlugins !== false,
       approveWithoutTab: raw.approveWithoutTab === true,
+      paranoid: raw.paranoid === true,
       protectedPaths: Array.isArray(raw.protectedPaths)
         ? raw.protectedPaths.filter((p) => typeof p === 'string' && p.trim())
         : [],
@@ -56,6 +57,35 @@ const NET_CMD = /(^|[\s;&|])(nmcli|nmtui|ip\s+(addr|a|route|r|link|rule|neigh|ne
 const SYS_CMD = /(^|[\s;&|])(apt|apt-get|dpkg|snap|mount|umount|modprobe|insmod|rmmod|reboot|shutdown|poweroff|halt|systemctl\s+(start|stop|restart|reload|disable|enable|mask|unmask|daemon-reload)|useradd|usermod|userdel|passwd|chpasswd|crontab|visudo|ldconfig|update-grub|mkfs|fdisk|parted)\b/
 // Запись в системные каталоги — запрещена вне разрешённых папок.
 const CRITICAL_PATH = /^\/(etc|usr|boot|lib|lib64|bin|sbin|var|opt|root|proc|sys|snap|run)(\/|$)/
+// Paranoid-режим: bash может запускать только программы из белого списка,
+// без составных команд, подстановок и редиректов. Обойти «вычисленными
+// путями» внутри интерпретатора (python -c, node -e и т.п.) тогда нельзя.
+const PARANOID_ALLOW = new Set([
+  'git', 'ls', 'cat', 'head', 'tail', 'grep', 'rg', 'find', 'wc', 'stat', 'file', 'tree', 'diff',
+  'echo', 'printf', 'pwd', 'make', 'cmake', 'gradle', './gradlew', 'java', 'javac', 'jar', 'javap',
+  'npm', 'npx', 'pnpm', 'yarn', 'node', 'curl', 'wget', 'tar', 'unzip', 'zip', 'gzip', 'gunzip',
+  'cp', 'mv', 'mkdir', 'rmdir', 'rm', 'touch', 'ln', 'sed', 'awk', 'sort', 'uniq', 'cut', 'tr', 'xargs',
+  'true', 'false', 'test', 'sleep', 'date', 'env', 'which', 'basename', 'dirname', 'realpath', 'readlink',
+  'sha256sum', 'md5sum', 'cmp', 'xxd', 'od', 'strings', 'du', 'df', 'ps', 'kill', 'pkill', 'nproc', 'uname', 'uptime',
+])
+const PARANOID_BAD = /[;|&`<>]|\$\(|\$\{/
+function paranoidReason(cmd) {
+  if (typeof cmd !== 'string' || !cmd.trim()) return 'пустая команда'
+  if (PARANOID_BAD.test(cmd)) return 'составные команды, подстановки и редиректы запрещены'
+  if (/(^|\s)-{1,2}(exec|execdir|delete|ok|eval)\b/.test(cmd)) return 'опасный флаг'
+  const words = cmd.trim().split(/\s+/)
+  let i = 0
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++
+  const prog = words[i] || ''
+  if (!prog) return 'пустая команда'
+  const name = prog.replace(/^.*\//, '')
+  if (!PARANOID_ALLOW.has(name)) return `программа «${name}» не в белом списке`
+  if (name === 'node' && words.slice(i + 1).some((w) => w === '-e' || w === '-p' || w === '--eval')) {
+    return 'node -e запрещён'
+  }
+  return null
+}
+
 // Маркер «админ разрешил полный доступ». Создать его может только root
 // (файл должен принадлежать uid 0), поэтому обычный пользователь и агент
 // не могут включить danger-full-access самостоятельно.
@@ -212,6 +242,16 @@ export function apply(ctx) {
           }
         }
         const inRoots = cfg.extraRoots.some((r) => cmd.includes(r))
+        if (cfg.paranoid) {
+          const why = paranoidReason(cmd)
+          if (why) {
+            return {
+              kind: 'deny',
+              reason: `Paranoid: ${why}. Команда разрешена только из белого списка; `
+                + 'отключите кнопку 🛡 Paranoid, если она действительно нужна.',
+            }
+          }
+        }
         if ((cmd.includes(DIR) || cmd.includes('auto-press')) && BASH_WRITE.test(cmd)) {
           return {
             kind: 'deny',
@@ -294,6 +334,7 @@ export function apply(ctx) {
     }
     if (tool === 'bash' && typeof args.command === 'string') {
       const cmd = args.command
+      if (cfg.paranoid && paranoidReason(cmd)) return false
       if ((cmd.includes(DIR) || cmd.includes('auto-press')) && BASH_WRITE.test(cmd)) return false
       if (launchScript && cmd.includes(launchScript) && BASH_WRITE.test(cmd)) return false
       if (cfg.lockPerms && BASH_PERMS.test(cmd)) return false
@@ -402,6 +443,7 @@ export function apply(ctx) {
         strictOutside: cfg.strictOutside,
         lockPlugins: cfg.lockPlugins,
         approveWithoutTab: cfg.approveWithoutTab,
+        paranoid: cfg.paranoid,
         protectedPaths: cfg.protectedPaths,
         extraRoots: cfg.extraRoots,
         candidates: candidates(p.sessionId),
@@ -433,6 +475,11 @@ export function apply(ctx) {
       cfg.lockPlugins = !!p.enabled
       saveConfig(cfg)
       return { lockPlugins: cfg.lockPlugins }
+    }
+    if (endpoint === 'setParanoid') {
+      cfg.paranoid = !!p.enabled
+      saveConfig(cfg)
+      return { paranoid: cfg.paranoid }
     }
     if (endpoint === 'setApproveWithoutTab') {
       cfg.approveWithoutTab = !!p.enabled

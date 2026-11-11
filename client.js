@@ -187,6 +187,7 @@ window.__ModuleLoader__.load({
       const [strictOutside, setStrictOutside] = React.useState(true)
       const [lockPlugins, setLockPlugins] = React.useState(true)
       const [approveNoTab, setApproveNoTab] = React.useState(false)
+      const [paranoid, setParanoid] = React.useState(false)
       const [roots, setRoots] = React.useState([])
       const [addRoot, setAddRoot] = React.useState('')
       const [paths, setPaths] = React.useState([])
@@ -208,6 +209,7 @@ window.__ModuleLoader__.load({
           setStrictOutside(v.strictOutside !== false)
           setLockPlugins(v.lockPlugins !== false)
           setApproveNoTab(v.approveWithoutTab === true)
+          setParanoid(v.paranoid === true)
           setRoots(v.extraRoots || [])
         }).catch((e) => setErr(String(e.message || e))).finally(() => setBusy(false))
       }
@@ -252,6 +254,16 @@ window.__ModuleLoader__.load({
           setMsg(v.approveWithoutTab
             ? 'Одобрение без вкладки включено: безопасные вызовы одобряются на сервере, диалог не нужен'
             : 'Одобрение без вкладки выключено: подтверждения снова только через диалог')
+        }).catch((e) => setErr(String(e.message || e)))
+      }
+
+      function toggleParanoid() {
+        const next = !paranoid
+        rpc('setParanoid', { enabled: next }).then((v) => {
+          setParanoid(v.paranoid === true)
+          setMsg(v.paranoid
+            ? 'Paranoid включён: bash — только программы из белого списка'
+            : 'Paranoid выключен: обычные проверки')
         }).catch((e) => setErr(String(e.message || e)))
       }
 
@@ -313,6 +325,7 @@ window.__ModuleLoader__.load({
         e('button', { className: 'dap-btn' + (roots.length ? ' dap-btn-on' : ''), onClick: () => openDialog('settings'), title: 'Разрешённые папки и защита системы' }, '⚙️ Настройки' + (roots.length ? ' · ' + roots.length : '')),
         e('button', { className: 'dap-btn' + (lockPlugins ? ' dap-btn-on' : ''), onClick: togglePlugins, title: 'Запретить агенту менять, переписывать и добавлять плагины' }, '🔌 Плагины'),
         e('button', { className: 'dap-btn' + (approveNoTab ? ' dap-btn-on' : ''), onClick: toggleApproveNoTab, title: 'Одобрять безопасные вызовы на сервере, не требуя открытой вкладки проекта' }, '🖱 Без вкладки'),
+        e('button', { className: 'dap-btn' + (paranoid ? ' dap-btn-on' : ''), onClick: toggleParanoid, title: 'Белый список программ для bash: без python -c, node -e, составных команд и редиректов' }, '🛡 Paranoid'),
       )
 
       let dialog = null
