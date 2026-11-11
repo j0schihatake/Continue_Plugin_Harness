@@ -56,6 +56,10 @@ const NET_CMD = /(^|[\s;&|])(nmcli|nmtui|ip\s+(addr|a|route|r|link|rule|neigh|ne
 const SYS_CMD = /(^|[\s;&|])(apt|apt-get|dpkg|snap|mount|umount|modprobe|insmod|rmmod|reboot|shutdown|poweroff|halt|systemctl\s+(start|stop|restart|reload|disable|enable|mask|unmask|daemon-reload)|useradd|usermod|userdel|passwd|chpasswd|crontab|visudo|ldconfig|update-grub|mkfs|fdisk|parted)\b/
 // Запись в системные каталоги — запрещена вне разрешённых папок.
 const CRITICAL_PATH = /^\/(etc|usr|boot|lib|lib64|bin|sbin|var|opt|root|proc|sys|snap|run)(\/|$)/
+// Маркер «админ разрешил полный доступ». Создать его может только root
+// (файл должен принадлежать uid 0), поэтому обычный пользователь и агент
+// не могут включить danger-full-access самостоятельно.
+const ADMIN_MARKER = path.join(DIR, 'admin-unlocked')
 
 export function apply(ctx) {
   const log = ctx && ctx.logger && typeof ctx.logger.info === 'function'
@@ -74,6 +78,16 @@ export function apply(ctx) {
   ]
   const PLUGIN_PKG_CMD = /(^|[\s;&|])(pnpm|npm|yarn)\s+(add|remove|uninstall|install|i)\b/
   const pending = new Map()
+
+  // Полный доступ разрешён только при наличии корневого маркера.
+  const adminUnlocked = () => {
+    try {
+      const st = fs.statSync(ADMIN_MARKER)
+      return st.isFile() && st.uid === 0
+    } catch {
+      return false
+    }
+  }
 
   const norm = (p) => path.resolve(String(p)).replace(/\/+$/, '')
 
@@ -105,6 +119,14 @@ export function apply(ctx) {
         if (pending.size > 500) {
           const oldest = pending.keys().next().value
           pending.delete(oldest)
+        }
+      }
+      if (args && args.sandbox_permissions === 'danger-full-access' && !adminUnlocked()) {
+        return {
+          kind: 'deny',
+          reason: 'Полный доступ (danger-full-access) выключен: включить его может только админ '
+            + 'командой «sudo touch /home/j0schi/.dsh/auto-press/admin-unlocked ». '
+            + 'Работайте в обычном режиме или попросите админа.',
         }
       }
       if (cfg.goalLock && (tool === 'create_goal' || tool === 'update_goal')) {
@@ -206,6 +228,7 @@ export function apply(ctx) {
   })
 
   function safeForApproval(tool, args) {
+    if (args && args.sandbox_permissions === 'danger-full-access' && !adminUnlocked()) return false
     if (cfg.goalLock && (tool === 'create_goal' || tool === 'update_goal')) return false
     if (FILE_TOOLS.has(tool)) {
       const target = args.file_path || args.path || args.target
@@ -237,6 +260,10 @@ export function apply(ctx) {
       const id = String((req && req.callId) || '')
       const rec = id ? pending.get(id) : undefined
       if (!rec) return next()
+      if (rec.args && rec.args.sandbox_permissions === 'danger-full-access' && !adminUnlocked()) {
+        pending.delete(id)
+        return 'rejected'
+      }
       if (safeForApproval(rec.tool, rec.args)) {
         pending.delete(id)
         return 'allowed-once'
