@@ -62,11 +62,18 @@ const CRITICAL_PATH = /^\/(etc|usr|boot|lib|lib64|bin|sbin|var|opt|root|proc|sys
 const ADMIN_MARKER = path.join(DIR, 'admin-unlocked')
 
 // Единственные команды, которым danger-full-access разрешён без маркера:
-// запуск dev-игры. Составные команды и подстановки запрещены.
-function isGameLaunch(cmd) {
+// запуск dev-игры. Составные команды и подстановки запрещены. Запускаемый
+// скрипт обязан быть одним из защищённых (protectedPaths) — свой
+// «tools/launch_dev.sh» в произвольной папке не подойдёт.
+function isGameLaunch(cmd, workdir, protectedList) {
   if (typeof cmd !== 'string' || cmd.length > 2000) return false
   if (/[;&|`\n\r]|\$\(|<\(|>\(/.test(cmd)) return false
-  return /(^|\s)(\.\/tools\/launch_dev\.sh|bash\s+tools\/launch_dev\.sh)(\s|$)/.test(cmd)
+  if (!/(^|\s)(\.\/tools\/launch_dev\.sh|bash\s+tools\/launch_dev\.sh)(\s|$)/.test(cmd)) return false
+  if (!workdir) return false
+  const script = path.join(path.resolve(String(workdir)), 'tools', 'launch_dev.sh')
+  return (protectedList || []).some((p) => {
+    try { return path.resolve(String(p)) === script } catch { return false }
+  })
 }
 
 export function apply(ctx) {
@@ -121,16 +128,22 @@ export function apply(ctx) {
   ctx.on('tools/pre-execute', async (exec, next) => {
     const tool = String((exec && exec.name) || '')
     const args = (exec && exec.arguments) || {}
+    let cwd = ''
+    try {
+      const agent = exec && exec.agent
+      cwd = String((agent && agent.session && agent.session.header && agent.session.header.cwd) || '')
+    } catch {}
+    const launchScript = cwd ? path.join(path.resolve(cwd), 'tools', 'launch_dev.sh') : ''
     try {
       if (exec && exec.callId) {
-        pending.set(String(exec.callId), { tool, args, at: Date.now() })
+        pending.set(String(exec.callId), { tool, args, at: Date.now(), cwd })
         if (pending.size > 500) {
           const oldest = pending.keys().next().value
           pending.delete(oldest)
         }
       }
       if (args && args.sandbox_permissions === 'danger-full-access'
-        && !adminUnlocked() && !isGameLaunch(args.command)) {
+        && !adminUnlocked() && !isGameLaunch(args.command, args.workdir || cwd, cfg.protectedPaths)) {
         return {
           kind: 'deny',
           reason: 'Полный доступ (danger-full-access) выключен: включить его может только админ '
@@ -147,6 +160,13 @@ export function apply(ctx) {
       }
       if (FILE_TOOLS.has(tool)) {
         const target = args.file_path || args.path || args.target
+        if (launchScript && target && norm(target) === norm(launchScript)) {
+          return {
+            kind: 'deny',
+            reason: 'Скрипт запуска игры (tools/launch_dev.sh) защищён: менять его агенту нельзя, '
+              + 'иначе полный доступ можно использовать для произвольного кода.',
+          }
+        }
         if (target && underRoots(target, [DIR])) {
           return {
             kind: 'deny',
@@ -179,6 +199,12 @@ export function apply(ctx) {
       }
       if (tool === 'bash' && typeof args.command === 'string') {
         const cmd = args.command
+        if (launchScript && cmd.includes(launchScript) && BASH_WRITE.test(cmd)) {
+          return {
+            kind: 'deny',
+            reason: 'Скрипт запуска игры (tools/launch_dev.sh) защищён: менять его агенту нельзя.',
+          }
+        }
         const inRoots = cfg.extraRoots.some((r) => cmd.includes(r))
         if (cmd.includes(DIR) && BASH_WRITE.test(cmd)) {
           return {
@@ -236,18 +262,21 @@ export function apply(ctx) {
     return next()
   })
 
-  function safeForApproval(tool, args) {
+  function safeForApproval(tool, args, cwd) {
+    const launchScript = cwd ? path.join(path.resolve(cwd), 'tools', 'launch_dev.sh') : ''
     if (args && args.sandbox_permissions === 'danger-full-access'
-      && !adminUnlocked() && !isGameLaunch(args.command)) return false
+      && !adminUnlocked() && !isGameLaunch(args.command, args.workdir || cwd, cfg.protectedPaths)) return false
     if (cfg.goalLock && (tool === 'create_goal' || tool === 'update_goal')) return false
     if (FILE_TOOLS.has(tool)) {
       const target = args.file_path || args.path || args.target
+      if (launchScript && target && norm(target) === norm(launchScript)) return false
       if (target && cfg.lockPlugins && underRoots(target, PLUGIN_ROOTS)) return false
       if (target && cfg.strictOutside && !underRoots(target, cfg.extraRoots) && CRITICAL_PATH.test(String(target))) return false
       if (isProtected(target, cfg.protectedPaths)) return false
     }
     if (tool === 'bash' && typeof args.command === 'string') {
       const cmd = args.command
+      if (launchScript && cmd.includes(launchScript) && BASH_WRITE.test(cmd)) return false
       if (cfg.lockPerms && BASH_PERMS.test(cmd)) return false
       if (cfg.strictOutside && NET_CMD.test(cmd)) return false
       if (cfg.strictOutside && SYS_CMD.test(cmd)) return false
@@ -271,11 +300,11 @@ export function apply(ctx) {
       const rec = id ? pending.get(id) : undefined
       if (!rec) return next()
       if (rec.args && rec.args.sandbox_permissions === 'danger-full-access'
-        && !adminUnlocked() && !isGameLaunch(rec.args.command)) {
+        && !adminUnlocked() && !isGameLaunch(rec.args.command, rec.args.workdir || rec.cwd, cfg.protectedPaths)) {
         pending.delete(id)
         return 'rejected'
       }
-      if (safeForApproval(rec.tool, rec.args)) {
+      if (safeForApproval(rec.tool, rec.args, rec.cwd)) {
         pending.delete(id)
         return 'allowed-once'
       }
