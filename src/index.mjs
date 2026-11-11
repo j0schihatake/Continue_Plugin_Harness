@@ -219,7 +219,7 @@ export function apply(ctx) {
             // Разрешены только явно читающие команды: иначе git reset/python -c
             // обходят BASH_WRITE и правят плагин без «пишущих» слов.
             const readOnly = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree|git\s+(status|log|diff|show|rev-parse|remote|branch))\b/
-            if (!readOnly.test(cmd)) {
+            if (!readOnly.test(cmd) || BASH_WRITE.test(cmd)) {
               return {
                 kind: 'deny',
                 reason: 'Плагины защищены (кнопка «Плагины»): менять, переписывать или добавлять плагины агенту нельзя '
@@ -289,7 +289,7 @@ export function apply(ctx) {
       if (cfg.lockPlugins) {
         const touches = PLUGIN_ROOTS.some((r) => cmd.includes(r)) || /\.dsh\/profiles|\.dsh\/plugins/.test(cmd)
         const readOnly = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree|git\s+(status|log|diff|show|rev-parse|remote|branch))\b/
-        if (touches && !readOnly.test(cmd)) return false
+        if (touches && (!readOnly.test(cmd) || BASH_WRITE.test(cmd))) return false
       }
       if (BASH_WRITE.test(cmd)) {
         for (const p of cfg.protectedPaths) if (cmd.includes(p)) return false
