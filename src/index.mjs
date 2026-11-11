@@ -250,14 +250,14 @@ export function apply(ctx) {
               + '(кнопка «Файлы»). Попросите пользователя снять галку «права и владелец».',
           }
         }
-        if (BASH_WRITE.test(cmd)) {
-          for (const p of cfg.protectedPaths) {
-            if (cmd.includes(p)) {
-              return {
-                kind: 'deny',
-                reason: `Команда изменяет защищённый файл «${p}» (кнопка «Файлы»). `
-                  + 'Попросите пользователя снять галку, если правка нужна.',
-              }
+        for (const p of cfg.protectedPaths) {
+          if (!cmd.includes(p)) continue
+          const readOnlyFile = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree)\b/
+          if (!readOnlyFile.test(cmd) || BASH_WRITE.test(cmd)) {
+            return {
+              kind: 'deny',
+              reason: `Команда трогает защищённый файл «${p}» (кнопка «Файлы»). `
+                + 'Попросите пользователя снять галку, если правка нужна.',
             }
           }
         }
@@ -291,8 +291,10 @@ export function apply(ctx) {
         const readOnly = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree|git\s+(status|log|diff|show|rev-parse|remote|branch))\b/
         if (touches && (!readOnly.test(cmd) || BASH_WRITE.test(cmd))) return false
       }
-      if (BASH_WRITE.test(cmd)) {
-        for (const p of cfg.protectedPaths) if (cmd.includes(p)) return false
+      for (const p of cfg.protectedPaths) {
+        if (!cmd.includes(p)) continue
+        const readOnlyFile = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree)\b/
+        if (!readOnlyFile.test(cmd) || BASH_WRITE.test(cmd)) return false
       }
     }
     return true
