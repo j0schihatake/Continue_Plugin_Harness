@@ -57,6 +57,27 @@ const NET_CMD = /(^|[\s;&|])(nmcli|nmtui|ip\s+(addr|a|route|r|link|rule|neigh|ne
 const SYS_CMD = /(^|[\s;&|])(apt|apt-get|dpkg|snap|mount|umount|modprobe|insmod|rmmod|reboot|shutdown|poweroff|halt|systemctl\s+(start|stop|restart|reload|disable|enable|mask|unmask|daemon-reload)|useradd|usermod|userdel|passwd|chpasswd|crontab|visudo|ldconfig|update-grub|mkfs|fdisk|parted)\b/
 // Запись в системные каталоги — запрещена вне разрешённых папок.
 const CRITICAL_PATH = /^\/(etc|usr|boot|lib|lib64|bin|sbin|var|opt|root|proc|sys|snap|run)(\/|$)/
+// Защищённый файл можно ИСПОЛНЯТЬ (запуск скрипта), но нельзя менять.
+function executesProtected(cmd, protectedPath) {
+  if (typeof cmd !== 'string' || !cmd.trim()) return false
+  if (/[;|&`<>]|\$\(/.test(cmd)) return false
+  const words = cmd.trim().split(/\s+/)
+  let i = 0
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++
+  const first = words[i] || ''
+  const second = words[i + 1] || ''
+  const base = path.basename(protectedPath)
+  const clean = (s) => String(s).replace(/^\.\//, '')
+  const isScript = (s) => s === protectedPath
+    || clean(s) === clean(protectedPath)
+    || clean(s).endsWith('/' + base)
+    || clean(s) === 'tools/' + base
+    || s === base
+  if (isScript(first)) return true
+  if ((first === 'bash' || first === 'sh') && isScript(second)) return true
+  return false
+}
+
 // Paranoid-режим: bash может запускать только программы из белого списка,
 // без составных команд, подстановок и редиректов. Обойти «вычисленными
 // путями» внутри интерпретатора (python -c, node -e и т.п.) тогда нельзя.
@@ -302,7 +323,8 @@ export function apply(ctx) {
           const base = path.basename(p)
           if (!cmd.includes(p) && !cmd.includes(base)) continue
           const readOnlyFile = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree)\b/
-          if (!readOnlyFile.test(cmd) || BASH_WRITE.test(cmd) || /[;|&`]|\$\(/.test(cmd)) {
+          if (!executesProtected(cmd, p)
+            && (!readOnlyFile.test(cmd) || BASH_WRITE.test(cmd) || /[;|&`]|\$\(/.test(cmd))) {
             return {
               kind: 'deny',
               reason: `Команда трогает защищённый файл «${p}» (кнопка «Файлы»). `
@@ -352,7 +374,8 @@ export function apply(ctx) {
         const base = path.basename(p)
         if (!cmd.includes(p) && !cmd.includes(base)) continue
         const readOnlyFile = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree)\b/
-        if (!readOnlyFile.test(cmd) || BASH_WRITE.test(cmd) || /[;|&`]|\$\(/.test(cmd)) return false
+        if (!executesProtected(cmd, p)
+          && (!readOnlyFile.test(cmd) || BASH_WRITE.test(cmd) || /[;|&`]|\$\(/.test(cmd))) return false
       }
     }
     return true
