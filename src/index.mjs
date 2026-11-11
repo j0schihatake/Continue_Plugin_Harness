@@ -213,8 +213,10 @@ export function apply(ctx) {
           }
         }
         if (cfg.lockPlugins) {
+          const wd = args.workdir || cwd
           const touchesPlugins = PLUGIN_ROOTS.some((r) => cmd.includes(r))
             || /\.dsh\/profiles|\.dsh\/plugins/.test(cmd)
+            || (wd && underRoots(wd, PLUGIN_ROOTS))
           if (touchesPlugins) {
             // Разрешены только явно читающие команды: иначе git reset/python -c
             // обходят BASH_WRITE и правят плагин без «пишущих» слов.
@@ -287,7 +289,9 @@ export function apply(ctx) {
       if (cfg.strictOutside && NET_CMD.test(cmd)) return false
       if (cfg.strictOutside && SYS_CMD.test(cmd)) return false
       if (cfg.lockPlugins) {
+        const wd = args.workdir || cwd
         const touches = PLUGIN_ROOTS.some((r) => cmd.includes(r)) || /\.dsh\/profiles|\.dsh\/plugins/.test(cmd)
+          || (wd && underRoots(wd, PLUGIN_ROOTS))
         const readOnly = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree|git\s+(status|log|diff|show|rev-parse|remote|branch))\b/
         if (touches && (!readOnly.test(cmd) || BASH_WRITE.test(cmd))) return false
       }
