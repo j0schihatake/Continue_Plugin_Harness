@@ -95,10 +95,11 @@ export function apply(ctx) {
   const pending = new Map()
 
   // Полный доступ разрешён только при наличии корневого маркера.
+  // lstat: симлинк на root-файл (например, /etc/shadow) маркером не считается.
   const adminUnlocked = () => {
     try {
-      const st = fs.statSync(ADMIN_MARKER)
-      return st.isFile() && st.uid === 0
+      const st = fs.lstatSync(ADMIN_MARKER)
+      return st.isFile() && !st.isSymbolicLink() && st.uid === 0
     } catch {
       return false
     }
@@ -215,13 +216,13 @@ export function apply(ctx) {
         if (cfg.lockPlugins) {
           const wd = args.workdir || cwd
           const touchesPlugins = PLUGIN_ROOTS.some((r) => cmd.includes(r))
-            || /\.dsh\/profiles|\.dsh\/plugins/.test(cmd)
+            || /Continue_Plugin_Harness|\.dsh\/profiles|\.dsh\/plugins/.test(cmd)
             || (wd && underRoots(wd, PLUGIN_ROOTS))
           if (touchesPlugins) {
             // Разрешены только явно читающие команды: иначе git reset/python -c
             // обходят BASH_WRITE и правят плагин без «пишущих» слов.
             const readOnly = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree|git\s+(status|log|diff|show|rev-parse|remote|branch))\b/
-            if (!readOnly.test(cmd) || BASH_WRITE.test(cmd)) {
+            if (!readOnly.test(cmd) || BASH_WRITE.test(cmd) || /[;|&`]|\$\(/.test(cmd)) {
               return {
                 kind: 'deny',
                 reason: 'Плагины защищены (кнопка «Плагины»): менять, переписывать или добавлять плагины агенту нельзя '
@@ -253,9 +254,10 @@ export function apply(ctx) {
           }
         }
         for (const p of cfg.protectedPaths) {
-          if (!cmd.includes(p)) continue
+          const base = path.basename(p)
+          if (!cmd.includes(p) && !cmd.includes(base)) continue
           const readOnlyFile = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree)\b/
-          if (!readOnlyFile.test(cmd) || BASH_WRITE.test(cmd)) {
+          if (!readOnlyFile.test(cmd) || BASH_WRITE.test(cmd) || /[;|&`]|\$\(/.test(cmd)) {
             return {
               kind: 'deny',
               reason: `Команда трогает защищённый файл «${p}» (кнопка «Файлы»). `
@@ -290,15 +292,17 @@ export function apply(ctx) {
       if (cfg.strictOutside && SYS_CMD.test(cmd)) return false
       if (cfg.lockPlugins) {
         const wd = args.workdir || cwd
-        const touches = PLUGIN_ROOTS.some((r) => cmd.includes(r)) || /\.dsh\/profiles|\.dsh\/plugins/.test(cmd)
+        const touches = PLUGIN_ROOTS.some((r) => cmd.includes(r))
+          || /Continue_Plugin_Harness|\.dsh\/profiles|\.dsh\/plugins/.test(cmd)
           || (wd && underRoots(wd, PLUGIN_ROOTS))
         const readOnly = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree|git\s+(status|log|diff|show|rev-parse|remote|branch))\b/
-        if (touches && (!readOnly.test(cmd) || BASH_WRITE.test(cmd))) return false
+        if (touches && (!readOnly.test(cmd) || BASH_WRITE.test(cmd) || /[;|&`]|\$\(/.test(cmd))) return false
       }
       for (const p of cfg.protectedPaths) {
-        if (!cmd.includes(p)) continue
+        const base = path.basename(p)
+        if (!cmd.includes(p) && !cmd.includes(base)) continue
         const readOnlyFile = /^\s*(ls|cat|head|tail|grep|rg|wc|stat|file|find|tree)\b/
-        if (!readOnlyFile.test(cmd) || BASH_WRITE.test(cmd)) return false
+        if (!readOnlyFile.test(cmd) || BASH_WRITE.test(cmd) || /[;|&`]|\$\(/.test(cmd)) return false
       }
     }
     return true

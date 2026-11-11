@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-press",
-  "version": "0.8.6",
+  "version": "0.8.7",
   "description": "Auto-press, manual goal lock, protected files, chmod/chown lock, extra allowed dirs, system command interceptor, plugin protection, no-internet mode that also switches the harness to the local Strata model",
   "type": "module",
   "main": "./src/index.mjs",
