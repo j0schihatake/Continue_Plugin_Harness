@@ -160,7 +160,12 @@ export function apply(ctx) {
         }
       }
       if (FILE_TOOLS.has(tool)) {
-        const target = args.file_path || args.path || args.target
+        const raw = args.file_path || args.path || args.target
+        // Относительный путь считаем от рабочей папки сессии, а не от cwd
+        // сервера: иначе проверки защищённых путей можно обойти.
+        const target = raw && cwd && !path.isAbsolute(String(raw))
+          ? path.resolve(cwd, String(raw))
+          : raw
         if (launchScript && target && norm(target) === norm(launchScript)) {
           return {
             kind: 'deny',
@@ -207,7 +212,7 @@ export function apply(ctx) {
           }
         }
         const inRoots = cfg.extraRoots.some((r) => cmd.includes(r))
-        if (cmd.includes(DIR) && BASH_WRITE.test(cmd)) {
+        if ((cmd.includes(DIR) || cmd.includes('auto-press')) && BASH_WRITE.test(cmd)) {
           return {
             kind: 'deny',
             reason: 'Настройки плагина защищены: менять его config.json командой агенту нельзя.',
@@ -278,7 +283,10 @@ export function apply(ctx) {
       && !adminUnlocked() && !isGameLaunch(args.command, args.workdir || cwd, cfg.protectedPaths)) return false
     if (cfg.goalLock && (tool === 'create_goal' || tool === 'update_goal')) return false
     if (FILE_TOOLS.has(tool)) {
-      const target = args.file_path || args.path || args.target
+      const raw = args.file_path || args.path || args.target
+      const target = raw && cwd && !path.isAbsolute(String(raw))
+        ? path.resolve(cwd, String(raw))
+        : raw
       if (launchScript && target && norm(target) === norm(launchScript)) return false
       if (target && cfg.lockPlugins && underRoots(target, PLUGIN_ROOTS)) return false
       if (target && cfg.strictOutside && !underRoots(target, cfg.extraRoots) && CRITICAL_PATH.test(String(target))) return false
@@ -286,6 +294,7 @@ export function apply(ctx) {
     }
     if (tool === 'bash' && typeof args.command === 'string') {
       const cmd = args.command
+      if ((cmd.includes(DIR) || cmd.includes('auto-press')) && BASH_WRITE.test(cmd)) return false
       if (launchScript && cmd.includes(launchScript) && BASH_WRITE.test(cmd)) return false
       if (cfg.lockPerms && BASH_PERMS.test(cmd)) return false
       if (cfg.strictOutside && NET_CMD.test(cmd)) return false
